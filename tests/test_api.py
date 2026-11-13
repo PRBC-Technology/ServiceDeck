@@ -48,15 +48,16 @@ def test_unlock_sets_a_session_cookie_and_rate_limits(app, clock):
         body = status.json()
         assert body["obs"]["state"] == "not_configured"
         assert body["ptz"]["cameras"] == []
-        assert body["placeholders"]["planning_center"]["implemented"] is False
-        assert body["placeholders"]["proclaim"]["implemented"] is False
-        assert body["placeholders"]["mixer"]["name"] == "Yamaha TF3"
+        assert body["planning_center"]["state"] == "not_configured"
+        assert body["proclaim"]["state"] == "not_configured"
+        assert body["mixer"]["state"] == "not_configured"
+        assert body["dashboard"][0]["page"] == "stream"
 
         refused = client.post("/api/integrations/obs/actions/go_live", json={"confirm": False})
         assert refused.status_code == 400
 
-        future = client.post("/api/integrations/planning_center/actions/next", json={})
-        assert future.status_code == 501
+        future = client.post("/api/integrations/planning_center/actions/missing", json={})
+        assert future.status_code == 404
 
         tiles = client.put(
             "/api/dashboard",

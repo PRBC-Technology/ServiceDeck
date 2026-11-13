@@ -136,21 +136,23 @@ def create_app(config_path: str | Path | None = None, clock=None) -> FastAPI:
         _require(request)
         integrations = request.app.state.integrations
         public = request.app.state.store.public_view()
-        placeholders = {}
-        for key in ("planning_center", "proclaim", "mixer"):
-            tile = integrations[key]
-            placeholders[key] = tile.status()
-            placeholders[key]["name"] = tile.name
-            placeholders[key]["description"] = tile.description
-            placeholders[key]["implemented"] = tile.implemented
         return {
             "version": __version__,
             "organization": public["organization"],
             "must_change_passcode": public["must_change_passcode"],
             "dashboard": public["dashboard"]["tiles"],
+            "pages": [
+                {"id": "stream", "label": "Stream"},
+                {"id": "cameras", "label": "Cameras"},
+                {"id": "sound", "label": "Sound"},
+                {"id": "service", "label": "Service"},
+            ],
             "obs": integrations["obs"].status(),
             "ptz": integrations["ptz"].status(),
-            "placeholders": placeholders,
+            "planning_center": integrations["planning_center"].status(),
+            "proclaim": integrations["proclaim"].status(),
+            "mixer": integrations["mixer"].status(),
+            "placeholders": {},
         }
 
     @app.get("/api/integrations")
@@ -246,3 +248,7 @@ def _reset_integrations(request: Request) -> None:
     probes = getattr(ptz, "_probes", None)
     if isinstance(probes, dict):
         probes.clear()
+    for key in ("mixer", "proclaim", "planning_center"):
+        reset = getattr(request.app.state.integrations[key], "reset_connection", None)
+        if callable(reset):
+            reset()

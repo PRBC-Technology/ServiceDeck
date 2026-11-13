@@ -29,11 +29,32 @@
   ],
   "dashboard": {
     "tiles": [
-      {"id": "obs", "visible": true, "order": 0},
-      {"id": "ptz", "visible": true, "order": 1},
-      {"id": "planning_center", "visible": false, "order": 2},
-      {"id": "proclaim", "visible": false, "order": 3},
-      {"id": "mixer", "visible": false, "order": 4}
+      {"id": "obs", "visible": true, "order": 0, "page": "stream"},
+      {"id": "ptz", "visible": true, "order": 1, "page": "cameras"},
+      {"id": "planning_center", "visible": true, "order": 2, "page": "service"},
+      {"id": "proclaim", "visible": true, "order": 3, "page": "service"},
+      {"id": "mixer", "visible": true, "order": 4, "page": "sound"}
+    ]
+  },
+  "planning_center": {
+    "_comment": "Personal access token from Planning Center. The real secret is stored only in servicedeck.json.",
+    "application_id": "",
+    "secret": "",
+    "service_type_id": ""
+  },
+  "proclaim": {
+    "host": "192.168.1.70",
+    "port": 52195,
+    "password": ""
+  },
+  "mixer": {
+    "_comment": "TF3 SCP on TCP 49280. Channel index 0 is console channel 1.",
+    "host": "192.168.1.80",
+    "port": 49280,
+    "banks": [],
+    "dca_labels": [],
+    "scenes": [
+      {"bank": "a", "number": 0, "label": "Sunday"}
     ]
   }
 }

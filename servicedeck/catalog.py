@@ -1,8 +1,4 @@
-"""Integration catalog shared by config, the server, and the dashboard.
-
-Future tiles are listed here so the layout can remember them, but v1 does not
-talk to those systems.
-"""
+"""Integration catalog shared by config, the server, and the dashboard."""
 
 from __future__ import annotations
 
@@ -12,6 +8,7 @@ INTEGRATIONS: list[dict] = [
         "name": "OBS",
         "implemented": True,
         "default_visible": True,
+        "page": "stream",
         "description": "Scenes, Facebook stream, and recording in OBS Studio.",
     },
     {
@@ -19,30 +16,42 @@ INTEGRATIONS: list[dict] = [
         "name": "PTZ cameras",
         "implemented": True,
         "default_visible": True,
+        "page": "cameras",
         "description": "Presets, pan, tilt, and zoom for the room cameras.",
     },
     {
         "id": "planning_center",
         "name": "Planning Center",
-        "implemented": False,
-        "default_visible": False,
+        "implemented": True,
+        "default_visible": True,
+        "page": "service",
         "description": "Today's service order from Planning Center Services.",
     },
     {
         "id": "proclaim",
         "name": "Proclaim",
-        "implemented": False,
-        "default_visible": False,
-        "description": "Current and next slide in Proclaim.",
+        "implemented": True,
+        "default_visible": True,
+        "page": "service",
+        "description": "Slides and service sections in Proclaim.",
     },
     {
         "id": "mixer",
         "name": "Yamaha TF3",
-        "implemented": False,
-        "default_visible": False,
-        "description": "Mixer scenes and mute groups for the Yamaha TF3, through Mixing Station.",
+        "implemented": True,
+        "default_visible": True,
+        "page": "sound",
+        "description": "Faders, mutes, and scene recall for the Yamaha TF3.",
     },
 ]
+
+PAGES: tuple[dict, ...] = (
+    {"id": "stream", "label": "Stream"},
+    {"id": "cameras", "label": "Cameras"},
+    {"id": "sound", "label": "Sound"},
+    {"id": "service", "label": "Service"},
+)
+PAGE_IDS = {page["id"] for page in PAGES}
 
 INTEGRATION_IDS = tuple(item["id"] for item in INTEGRATIONS)
 BY_ID = {item["id"]: item for item in INTEGRATIONS}

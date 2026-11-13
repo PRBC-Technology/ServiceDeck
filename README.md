@@ -2,12 +2,14 @@
 
 ServiceDeck is the Sunday control dashboard for the PRBC booth. One computer on the church network runs it. The volunteer on the sound desk, and an iPad on the same Wi-Fi, open it in a browser and run the service from big touch tiles.
 
-Version 1 controls:
+The screen is a set of tabs sized for an 11-inch iPad (about 1194×834 landscape and 834×1194 portrait) and a desktop browser. Each tab is one screen: Stream, Cameras, Sound, Service, and Settings. Tiles can be moved between the first four tabs. That layout is saved on the booth PC.
 
-- **OBS Studio** — program scenes, Go Live / End Stream, recording, and a stream timer. The Facebook stream uses the stream key already saved in OBS.
-- **PTZ cameras** — several cameras, labelled preset buttons, press-and-hold pan/tilt, zoom, speed, and home. The camera protocol is VISCA over IP (Sony / BirdDog style, UDP port 52381).
+What the tabs control:
 
-Planning Center, Proclaim, and the Yamaha TF3 are on the dashboard as tiles you can turn on later. They do not control those systems yet. See [Roadmap](#roadmap).
+- **Stream** — OBS Studio: program scenes, Go Live / End Stream, recording, and a stream timer. The Facebook stream uses the stream key already saved in OBS.
+- **Cameras** — PTZ cameras over VISCA over IP (Sony / BirdDog style, UDP port 52381): labelled presets, press-and-hold pan/tilt, zoom, speed, and home.
+- **Sound** — Yamaha TF3 over SCP on TCP port 49280: eight channel faders at a time, custom banks, DCA faders, the stereo master, and scene recall.
+- **Service** — today's Planning Center plan (read-only) and Proclaim remote control.
 
 ## Sunday, for the volunteer
 
@@ -15,9 +17,10 @@ Planning Center, Proclaim, and the Yamaha TF3 are on the dashboard as tiles you 
 2. Leave that window open. Closing it stops the dashboard. It does not, by itself, stop a stream that OBS has already started.
 3. On this PC a browser opens. On the iPad, open Safari to the **Other devices** address printed in the window, for example `http://192.168.1.20:8080`.
 4. Enter the passcode. The first time, it is `0000`. Change it before the next Sunday.
-5. **Go Live** asks you to confirm, then tells OBS to start the stream it is already set up to send. **End Stream** asks you to confirm too.
+5. Use the tabs along the top. **Go Live** asks you to confirm, then tells OBS to start the stream it is already set up to send. **End Stream** asks you to confirm too.
 6. Scene buttons switch the program scene. Camera preset buttons recall a saved shot. Hold an arrow to move the camera; let go and it stops.
-7. Press **Lock** when you walk away. The stream keeps running.
+7. On **Sound**, drag a fader or tap On. Scene buttons ask before they recall. On **Service**, the plan is read-only. If Planning Center is live, the current item is highlighted. If it is not, Previous and Next step through the order.
+8. Press **Lock** when you walk away. The stream keeps running.
 
 ## Set up the booth PC (Windows)
 
@@ -125,7 +128,10 @@ VISCA over IP fixes the camera address at 1, which is the factory address. The p
 - the bind address and port
 - OBS host, port, and WebSocket password
 - cameras, protocols, and preset labels
-- which tiles are visible, and their order
+- Planning Center application id and secret
+- Proclaim host and remote password
+- TF3 address, channel banks, DCA labels, and scene buttons
+- which tiles are visible, which tab they sit on, and their order
 
 `config/servicedeck.example.json` is a commented example with sample addresses and no passcode. Keys that start with `_` are ignored if you copy the example over the real file.
 
@@ -139,8 +145,41 @@ This is a trusted-LAN tool, not a website.
 - Five wrong passcodes lock that device out for 30 seconds. Further groups of five wait longer, up to 10 minutes.
 - Every control under `/api/` requires the session. The lock screen is the only page that works without it.
 - There is no HTTPS. Do not put this on the public internet, and do not port-forward it. Anyone on the church Wi-Fi who knows the passcode can switch scenes, go live, and move cameras.
-- `config/servicedeck.json` contains the OBS WebSocket password. It is git-ignored. The settings page does not send that password back to the browser after it is saved.
+- `config/servicedeck.json` contains the OBS password, the Planning Center secret, and the Proclaim remote password. It is git-ignored. After a secret is saved, Settings does not send it back to the browser.
 - Press **Lock** when the desk is unattended. Locking the screen does not stop an active stream.
+
+## Planning Center
+
+In Settings → Service, enter a [Personal Access Token](https://api.planningcenteronline.com/docs/overview/authentication) application id and secret. They are stored only in `config/servicedeck.json`. Load the service types, pick the Sunday service, and save.
+
+The Service tab shows that service type's plan for today, or the next plan if today has none: title, date, ordered items (songs, headers, and other items, with lengths), and who is scheduled. If a Planning Center Live session is running, its current item is highlighted. Otherwise Previous and Next walk the order on this dashboard only. They do not change Planning Center.
+
+The last successful plan is cached in `config/planning_center_cache.json`. If the internet drops mid-service, the tile keeps showing that copy and says so.
+
+## Proclaim
+
+Proclaim's documented remote is HTTP on port **52195**, which cannot be changed. In Proclaim: **Settings → Remote → Enable**, and set a network control password if ServiceDeck is not running on the Proclaim computer.
+
+The tile can send:
+
+| Control | Command | Confirmed in Proclaim's public article |
+| --- | --- | --- |
+| Next slide | `nextSlide` | Yes |
+| Pre-service, warm-up, service, post-service | `StartPreService`, `StartWarmUp`, `StartService`, `StartPostService` | Yes |
+| On air / off air | `GET /onair/session` | Yes. This is the only documented status. Proclaim does not report the current slide or item. |
+| Previous slide, previous item, next item | `previousSlide`, `previousServiceItem`, `nextServiceItem` | Not in the article's command list we could retrieve. These are the names Bitfocus Companion uses. Treat them as unverified until someone presses them on the real Proclaim. |
+
+## Yamaha TF3
+
+The mixer is controlled with Yamaha's SCP text protocol on TCP **49280**. Details, including what is confirmed and what still needs the console, are in [docs/yamaha-tf3.md](docs/yamaha-tf3.md).
+
+Settings → Sound stores the mixer IP, up to eight channels per bank in any order, DCA labels, and the scene buttons. The Sound tab keeps the stereo master on screen, shows one bank or the DCAs, and asks before recalling a scene. Fader moves are throttled while a finger is down. Levels are polled back from the console when it answers.
+
+## iPad layout
+
+Tabs stay on screen. A tab's tiles fill the space under them, and a long service order scrolls inside its tile rather than pushing the page. Buttons are at least 44 pixels. Settings is split into General, OBS, Cameras, Sound, Service, and Tabs so each section is one screen, with a long camera list scrolling inside that section only.
+
+In Settings → Tabs, show or hide a tile, choose its tab, and move it up or down. That choice is stored with the other settings and is the same on every device.
 
 ## Tests
 
@@ -155,7 +194,7 @@ pytest
 
 On macOS or Linux the same commands work with `python3` and `source .venv/bin/activate`.
 
-Covered without hardware: config load and save, passcode hashing and lockout, the session cookie, and VISCA packet bytes (header, sequence reset, presets, pan/tilt, zoom, home). Before a Sunday, still check the real devices once: OBS test connection, a scene change, a short test stream, a preset recall, and a pan that stops when you let go.
+Covered without hardware: config load and save, passcode hashing and lockout, the session cookie, VISCA packet bytes, Planning Center plan selection and the offline cache, Proclaim command URLs, and TF3 SCP command lines and reply parsing. Before a Sunday, still check the real devices once. The power outage means none of the network devices have been exercised from this build.
 
 ## Adding a tile
 
@@ -175,13 +214,8 @@ Camera protocols implement `servicedeck/drivers/base.py` and are chosen with the
 
 Not built yet:
 
-- **Planning Center** — today's service order on a tile
-- **Proclaim** — current slide and next slide
-- **Yamaha TF3** — scene recall and mute groups through Mixing Station
-- **Later:** DMX lighting
-- **Later:** a presentation-app control beyond Proclaim, if the booth adds one
-
-The three church systems above have placeholder modules and hidden tiles so the layout file already knows their ids. Turning a placeholder tile on shows "Not in this version". It does not pretend to work.
+- DMX lighting
+- A presentation control other than Proclaim, if the booth adds one
 
 ## License
 

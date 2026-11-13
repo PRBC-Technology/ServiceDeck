@@ -4,6 +4,11 @@ const app = document.getElementById("app");
 
 const state = {
   view: "boot",
+  page: "stream",
+  settingsSection: "general",
+  mixerBank: "",
+  mixerView: "channels",
+  dragKey: "",
   authed: false,
   organization: "PRBC",
   version: "",
@@ -84,6 +89,7 @@ async function loadStatus(force) {
   const key = structureKey(status);
   const changed = key !== state.structure;
   state.structure = key;
+  if (state.view === "settings") return;
   if (state.view !== "dashboard") return;
   if ((changed || force) && !state.holding) renderShell();
   else if (changed || force) state.pendingRender = true;
@@ -108,6 +114,11 @@ function structureKey(status) {
     connected: !!obs.connected,
     cameras,
     cameraId: state.cameraId,
+    plan: status?.planning_center?.plan?.id,
+    planItems: (status?.planning_center?.plan?.items || []).map((item) => item.id + item.title),
+    banks: (status?.mixer?.banks || []).map((bank) => bank.id + bank.name + JSON.stringify(bank.channels)),
+    scenes: status?.mixer?.scenes,
+    onAir: !!status?.proclaim?.on_air,
   });
 }
 
@@ -141,8 +152,8 @@ function renderShell() {
     shell.innerHTML = lockHtml();
     return;
   }
-  const body = state.view === "settings" ? settingsHtml() : dashboardHtml();
-  shell.innerHTML = `<div class="shell">${topbarHtml()}${body}</div>`;
+  const body = state.view === "settings" ? settingsPage() : dashboardHtml();
+  shell.innerHTML = `<div class="fit">${topbarHtml()}${tabBar()}${body}</div>`;
   state.pendingRender = false;
 }
 
@@ -158,7 +169,6 @@ function topbarHtml() {
       </div>
       <div class="spacer"></div>
       <div class="top-actions">
-        <button type="button" data-action="settings">${state.view === "settings" ? "Done" : "Settings"}</button>
         <button type="button" data-action="lock">Lock</button>
       </div>
     </header>`;
@@ -197,31 +207,43 @@ function keyButton(value, locked, label, extra) {
   return `<button type="button" data-key="${value}" class="${extra || ""}" ${locked ? "disabled" : ""}>${text}</button>`;
 }
 
+function tabBar() {
+  const pages = [
+    { id: "stream", label: "Stream" },
+    { id: "cameras", label: "Cameras" },
+    { id: "sound", label: "Sound" },
+    { id: "service", label: "Service" },
+    { id: "settings", label: "Settings" },
+  ];
+  return `<nav class="tabbar">${pages.map((page) =>
+    `<button type="button" data-page="${page.id}" class="${state.page === page.id ? "active" : ""}">${page.label}</button>`
+  ).join("")}</nav>`;
+}
+
 function dashboardHtml() {
   const status = state.status;
-  if (!status) return "<p class=\"hint\">Loading the booth…</p>";
-  const banner = state.mustChange
-    ? '<div class="banner">The passcode is still the default 0000. Change it in Settings before Sunday.</div>'
-    : "";
+  if (!status) return '<div class="page-wrap"><p class="hint">Loading the booth…</p></div>';
   const tiles = (status.dashboard || [])
-    .filter((tile) => tile.visible)
-    .sort((a, b) => a.order - b.order)
-    .map(renderTile)
-    .join("");
-  const empty = tiles ? "" : '<p class="empty">No tiles are showing. Turn some on in Settings.</p>';
-  return `${banner}<section class="tiles">${tiles}${empty}</section><p class="sub">ServiceDeck ${esc(state.version)}</p>`;
+    .filter((tile) => tile.visible && (tile.page || "stream") === state.page)
+    .sort((a, b) => a.order - b.order);
+  const banner = state.mustChange
+    ? '<div class="banner">The passcode is still the default 0000. Change it in Settings.</div>'
+    : "";
+  const count = Math.min(tiles.length, 2);
+  const rendered = tiles.map(renderTile).join("");
+  const empty = tiles.length
+    ? ""
+    : '<p class="empty">Nothing on this tab. Choose tiles in Settings.</p>';
+  return `<div class="page-wrap">${banner}<div class="page-grid count-${count || 1}">${rendered}${empty}</div></div>`;
 }
 
 function renderTile(tile) {
   if (tile.id === "obs") return obsTile(state.status.obs || {});
   if (tile.id === "ptz") return ptzTile(state.status.ptz || {});
-  const placeholder = (state.status.placeholders || {})[tile.id] || {};
-  return `
-    <article class="tile placeholder wide">
-      <h2>${esc(placeholder.name || tile.id)}</h2>
-      <p>${esc(placeholder.description || "Not in this version.")}</p>
-      <p class="pill">Not in this version</p>
-    </article>`;
+  if (tile.id === "planning_center") return planTile(state.status.planning_center || {});
+  if (tile.id === "proclaim") return proclaimTile(state.status.proclaim || {});
+  if (tile.id === "mixer") return mixerTile(state.status.mixer || {});
+  return `<article class="tile"><h2>${esc(tile.id)}</h2><p>Not in this version.</p></article>`;
 }
 
 function obsTile(obs) {
@@ -338,15 +360,50 @@ function zoomButton(label, direction, disabled) {
   return `<button type="button" data-hold="zoom" data-direction="${direction}" ${disabled}>${label}</button>`;
 }
 
-function settingsHtml() {
+function settingsPage() {
   const draft = state.settings || blankSettings();
+  const sections = [
+    ["general", "General"],
+    ["obs", "OBS"],
+    ["cameras", "Cameras"],
+    ["sound", "Sound"],
+    ["service", "Service"],
+    ["layout", "Tabs"],
+  ];
+  const nav = sections.map(([id, label]) =>
+    `<button type="button" data-section="${id}" class="${state.settingsSection === id ? "active" : ""}">${label}</button>`
+  ).join("");
   return `
-    <div class="settings">
-      ${passcodeCard()}
-      ${deviceCard(draft)}
-      ${layoutCard()}
-      <p class="sub">${esc(state.settingsMessage)}</p>
+    <div class="page-wrap settings-fit">
+      <div class="section-nav">${nav}</div>
+      <div class="section-body" id="settings">
+        ${settingsSection(draft)}
+        <p class="sub">${esc(state.settingsMessage)}</p>
+      </div>
     </div>`;
+}
+
+function settingsSection(draft) {
+  if (state.settingsSection === "general") return generalCard(draft);
+  if (state.settingsSection === "obs") return obsCard(draft);
+  if (state.settingsSection === "cameras") return cameraCard(draft);
+  if (state.settingsSection === "sound") return soundCard(draft);
+  if (state.settingsSection === "service") return serviceCard(draft);
+  return layoutCard();
+}
+
+function generalCard(draft) {
+  return `
+    <section class="card">
+      <h2>General</h2>
+      <div class="fields two">
+        <label class="field"><span>Name on the dashboard</span><input name="organization" value="${esc(draft.organization)}" maxlength="40"></label>
+        <label class="field"><span>Dashboard port</span><input name="server-port" inputmode="numeric" value="${esc(draft.server.port)}"></label>
+      </div>
+      <p class="sub">${serverNote(draft)}</p>
+      <div class="actions"><button type="button" class="primary" data-action="save-settings">Save</button></div>
+      ${passcodeCard()}
+    </section>`;
 }
 
 function passcodeCard() {
@@ -365,19 +422,12 @@ function passcodeCard() {
     </section>`;
 }
 
-function deviceCard(draft) {
+function obsCard(draft) {
   const obs = draft.obs;
-  const cameras = draft.cameras.map((camera, index) => cameraEditor(camera, index)).join("");
   return `
-    <section class="card" id="settings">
-      <h2>Devices</h2>
-      <p class="lead">Addresses are remembered on this computer. The Facebook stream key stays in OBS.</p>
-      <div class="fields two">
-        <label class="field"><span>Name on the dashboard</span><input name="organization" value="${esc(draft.organization)}" maxlength="40"></label>
-        <label class="field"><span>Dashboard port</span><input name="server-port" inputmode="numeric" value="${esc(draft.server.port)}"></label>
-      </div>
-      <p class="sub">${serverNote(draft)}</p>
+    <section class="card">
       <h2>OBS</h2>
+      <p class="lead">The Facebook stream key stays in OBS.</p>
       <div class="fields two">
         <label class="field"><span>OBS computer IP</span><input name="obs-host" value="${esc(obs.host)}" autocomplete="off"></label>
         <label class="field"><span>WebSocket port</span><input name="obs-port" inputmode="numeric" value="${esc(obs.port)}"></label>
@@ -391,11 +441,19 @@ function deviceCard(draft) {
         <button type="button" data-action="test-obs">Test OBS</button>
       </div>
       <p class="sub" data-test="obs">${esc(state.testResults.obs || "")}</p>
+    </section>`;
+}
+
+function cameraCard(draft) {
+  const cameras = (draft.cameras || []).map((camera, index) => cameraEditor(camera, index)).join("");
+  return `
+    <section class="card">
       <h2>Cameras</h2>
       <p class="lead">VISCA over IP uses UDP port 52381. Preset 1 is the camera's first memory.</p>
       ${cameras || '<p class="empty">No cameras yet.</p>'}
       <div class="actions">
         <button type="button" data-action="add-camera">Add camera</button>
+        <button type="button" class="primary" data-action="save-settings">Save</button>
       </div>
     </section>`;
 }
@@ -447,15 +505,17 @@ function layoutCard() {
     return `
       <li>
         <label class="check"><input type="checkbox" data-tile-visible="${esc(tile.id)}" ${tile.visible ? "checked" : ""}> ${esc(info.name)}</label>
-        <span class="name">${info.implemented ? "" : '<span class="soon">Not in this version</span>'}</span>
+        <select data-tile-page="${esc(tile.id)}" aria-label="Tab for ${esc(info.name)}">
+          ${[["stream", "Stream"], ["cameras", "Cameras"], ["sound", "Sound"], ["service", "Service"]].map(([page, label]) => `<option value="${page}" ${(tile.page || "stream") === page ? "selected" : ""}>${label}</option>`).join("")}
+        </select>
         <button type="button" data-action="tile-up" data-tile="${esc(tile.id)}">Up</button>
         <button type="button" data-action="tile-down" data-tile="${esc(tile.id)}">Down</button>
       </li>`;
   }).join("");
   return `
     <section class="card">
-      <h2>Tiles</h2>
-      <p class="lead">Shown on every device that opens this dashboard. Order is saved on the booth computer.</p>
+      <h2>Tabs</h2>
+      <p class="lead">Each tile lives on one tab. The same layout opens on every device.</p>
       <ul class="tile-order">${items}</ul>
     </section>`;
 }
@@ -465,6 +525,9 @@ function tileInfo(id) {
   if (fromStatus) return { name: fromStatus.name, implemented: false, description: fromStatus.description };
   if (id === "obs") return { name: "OBS", implemented: true };
   if (id === "ptz") return { name: "PTZ cameras", implemented: true };
+  if (id === "planning_center") return { name: "Planning Center", implemented: true };
+  if (id === "proclaim") return { name: "Proclaim", implemented: true };
+  if (id === "mixer") return { name: "Yamaha TF3", implemented: true };
   const found = state.catalog.find((item) => item.id === id);
   return found || { name: id, implemented: false };
 }
@@ -475,6 +538,9 @@ function blankSettings() {
     server: { host: "0.0.0.0", port: 8080 },
     obs: { host: "", port: 4455, password_set: false, use_start_scene: false, start_scene: "" },
     cameras: [],
+    planning_center: { application_id: "", service_type_id: "", secret_set: false },
+    proclaim: { host: "", port: 52195, password_set: false },
+    mixer: { host: "", port: 49280, banks: [], dca_labels: [], scenes: [] },
     running: null,
     restart_required: false,
   };
@@ -487,12 +553,16 @@ function onClick(event) {
     pressKey(key.dataset.key);
     return;
   }
+  const pageButton = event.target.closest("[data-page]");
+  if (pageButton) return showPage(pageButton.dataset.page);
+  const sectionButton = event.target.closest("[data-section]");
+  if (sectionButton) return showSection(sectionButton.dataset.section);
   const button = event.target.closest("[data-action]");
   if (!button || button.disabled) return;
   const action = button.dataset.action;
   if (action === "unlock-form") return;
   if (action === "lock") return lock();
-  if (action === "settings") return toggleSettings();
+  if (action === "settings") return openSettings();
   if (action === "scene") return run("obs", "set_scene", { name: button.dataset.scene });
   if (action === "go-live") return askGoLive();
   if (action === "end-stream") return askEndStream();
@@ -525,9 +595,48 @@ function onClick(event) {
   if (action === "test-camera") return testCamera(Number(button.dataset.cameraIndex));
   if (action === "tile-up") return moveTile(button.dataset.tile, -1);
   if (action === "tile-down") return moveTile(button.dataset.tile, 1);
+  if (action === "plan-step") return run("planning_center", "step", { delta: Number(button.dataset.delta) });
+  if (action === "plan-refresh") return run("planning_center", "refresh", {});
+  if (action === "proclaim") return run("proclaim", button.dataset.command, {});
+  if (action === "mixer-on") return toggleMixerOn(button.dataset.target, Number(button.dataset.index));
+  if (action === "mixer-bank") {
+    state.mixerView = "channels";
+    state.mixerBank = button.dataset.bank;
+    renderShell();
+    return;
+  }
+  if (action === "mixer-dca") {
+    state.mixerView = "dca";
+    renderShell();
+    return;
+  }
+  if (action === "recall-scene") return askRecall(button.dataset.bank, Number(button.dataset.number), button.dataset.label);
+  if (action === "load-service-types") return loadServiceTypes();
+  if (action === "add-bank") return addBank();
+  if (action === "add-scene") return addScene();
+  if (action === "test-proclaim") return testIntegration("proclaim");
+  if (action === "test-mixer") return testIntegration("mixer");
+  if (action === "test-planning") return testIntegration("planning_center");
+}
+
+function showPage(page) {
+  if (state.view === "settings") readSettingsFromDom();
+  state.page = page;
+  state.view = page === "settings" ? "settings" : "dashboard";
+  state.structure = "";
+  if (page === "settings" && !state.settings) return openSettings();
+  renderShell();
+}
+
+function showSection(section) {
+  readSettingsFromDom();
+  state.settingsSection = section;
+  renderShell();
 }
 
 function onPointerDown(event) {
+  const fader = event.target.closest("[data-fader]");
+  if (fader) return startFader(event, fader);
   const el = event.target.closest("[data-hold]");
   if (!el || el.disabled || (event.button !== undefined && event.button !== 0)) return;
   event.preventDefault();
@@ -556,6 +665,12 @@ function onInput(event) {
 }
 
 function onChange(event) {
+  const pageId = event.target.dataset.tilePage;
+  if (pageId && state.status) {
+    const tiles = state.status.dashboard.map((tile) => ({ ...tile, page: tile.id === pageId ? event.target.value : tile.page }));
+    saveTiles(tiles);
+    return;
+  }
   const id = event.target.dataset.tileVisible;
   if (!id || !state.status) return;
   if (state.view === "settings") readSettingsFromDom();
@@ -662,9 +777,13 @@ async function openSettings() {
       server: config.server,
       obs: config.obs,
       cameras: config.cameras || [],
+      planning_center: config.planning_center,
+      proclaim: config.proclaim,
+      mixer: config.mixer,
       running: config.running,
       restart_required: config.restart_required,
     };
+    state.page = "settings";
     state.view = "settings";
     state.settingsMessage = "";
     renderShell();
@@ -853,14 +972,36 @@ function readSettingsFromDom() {
   const root = document.getElementById("settings");
   if (!root || !state.settings) return state.settings;
   const draft = state.settings;
-  draft.organization = value(root, "organization");
-  draft.server.port = Number(value(root, "server-port")) || draft.server.port;
-  draft.obs.host = value(root, "obs-host").trim();
-  draft.obs.port = Number(value(root, "obs-port")) || 4455;
-  draft.obs.start_scene = value(root, "obs-start-scene").trim();
-  draft.obs.use_start_scene = root.querySelector('[name="obs-use-start"]').checked;
-  draft.obs._password = value(root, "obs-password");
-  draft.obs._clearPassword = root.querySelector('[name="obs-clear-password"]').checked;
+  const organization = root.querySelector('[name="organization"]');
+  if (organization) draft.organization = organization.value;
+  const serverPort = root.querySelector('[name="server-port"]');
+  if (serverPort) draft.server.port = Number(serverPort.value) || draft.server.port;
+  const obsHost = root.querySelector('[name="obs-host"]');
+  if (obsHost) {
+    draft.obs.host = obsHost.value.trim();
+    draft.obs.port = Number(value(root, "obs-port")) || 4455;
+    draft.obs.start_scene = value(root, "obs-start-scene").trim();
+    draft.obs.use_start_scene = root.querySelector('[name="obs-use-start"]').checked;
+    draft.obs._password = value(root, "obs-password");
+    draft.obs._clearPassword = root.querySelector('[name="obs-clear-password"]').checked;
+  }
+  const planApp = root.querySelector('[name="pco-app"]');
+  if (planApp) {
+    draft.planning_center = draft.planning_center || {};
+    draft.planning_center.application_id = planApp.value.trim();
+    draft.planning_center.service_type_id = value(root, "pco-type").trim();
+    draft.planning_center._secret = value(root, "pco-secret");
+    draft.planning_center._clearSecret = root.querySelector('[name="pco-clear"]').checked;
+  }
+  const proclaimHost = root.querySelector('[name="proclaim-host"]');
+  if (proclaimHost) {
+    draft.proclaim = draft.proclaim || { port: 52195 };
+    draft.proclaim.host = proclaimHost.value.trim();
+    draft.proclaim._password = value(root, "proclaim-password");
+    draft.proclaim._clearPassword = root.querySelector('[name="proclaim-clear"]').checked;
+  }
+  const mixerHost = root.querySelector('[name="mixer-host"]');
+  if (mixerHost) readMixerFromDom(root, draft);
   root.querySelectorAll(".camera").forEach((block) => {
     const index = Number(block.dataset.cameraIndex);
     const camera = draft.cameras[index];
@@ -888,10 +1029,22 @@ function settingsPayload(draft) {
   };
   if (draft.obs._clearPassword) obs.password = "";
   else if (draft.obs._password) obs.password = draft.obs._password;
+  const planning = {
+    application_id: draft.planning_center?.application_id || "",
+    service_type_id: draft.planning_center?.service_type_id || "",
+  };
+  if (draft.planning_center?._clearSecret) planning.secret = "";
+  else if (draft.planning_center?._secret) planning.secret = draft.planning_center._secret;
+  const proclaim = { host: draft.proclaim?.host || "", port: 52195 };
+  if (draft.proclaim?._clearPassword) proclaim.password = "";
+  else if (draft.proclaim?._password) proclaim.password = draft.proclaim._password;
   return {
     organization: draft.organization,
     server: { host: draft.server.host || "0.0.0.0", port: Number(draft.server.port) || 8080 },
     obs,
+    planning_center: planning,
+    proclaim,
+    mixer: draft.mixer,
     cameras: draft.cameras.map((camera) => ({
       id: camera.id || "",
       name: camera.name,
@@ -915,6 +1068,9 @@ async function saveSettings() {
       server: saved.server,
       obs: saved.obs,
       cameras: saved.cameras || [],
+      planning_center: saved.planning_center,
+      proclaim: saved.proclaim,
+      mixer: saved.mixer,
       running: saved.running,
       restart_required: saved.restart_required,
     };
@@ -1088,6 +1244,33 @@ function patch() {
     const message = document.querySelector("[data-bind='cam-message']");
     if (message) message.textContent = camera.message || "";
   }
+  patchPlan();
+  patchMixer();
+}
+
+function patchPlan() {
+  const plan = state.status?.planning_center;
+  if (!plan) return;
+  document.querySelectorAll("[data-item]").forEach((row) => {
+    row.classList.toggle("current", row.dataset.item === plan.current_item_id);
+  });
+}
+
+function patchMixer() {
+  document.querySelectorAll("[data-fader]").forEach((el) => {
+    const key = `${el.dataset.fader}:${el.dataset.index}`;
+    if (state.dragKey === key) return;
+    const strip = mixerStrip(el.dataset.fader, Number(el.dataset.index));
+    if (!strip || strip.level == null) return;
+    el.style.setProperty("--pos", String(levelToSlider(strip.level)));
+    const label = el.closest(".strip")?.querySelector(".strip-level");
+    if (label) label.textContent = formatLevel(strip.level);
+    const button = el.closest(".strip")?.querySelector("[data-action='mixer-on']");
+    if (button && strip.on != null) {
+      button.classList.toggle("on", !!strip.on);
+      button.textContent = strip.on ? "On" : "Off";
+    }
+  });
 }
 
 function currentCamera() {
@@ -1169,4 +1352,362 @@ document.addEventListener("submit", (event) => {
     event.preventDefault();
     submitPasscode();
   }
+});
+
+function planTile(plan) {
+  if (!plan || plan.state === "not_configured") {
+    return `<article class="tile"><h2>Planning Center</h2><p class="empty">${esc(plan?.message || "Add a token in Settings.")}</p></article>`;
+  }
+  const body = plan.plan;
+  if (!body) {
+    return `<article class="tile"><h2>Planning Center</h2><p class="empty">${esc(plan.message || "No plan for this service type.")}</p></article>`;
+  }
+  const items = (body.items || []).map((item) => `
+    <div class="order-item ${item.id === plan.current_item_id ? "current" : ""}" data-item="${esc(item.id)}">
+      <span class="kind">${esc(item.item_type)}</span>
+      <span class="title">${esc(item.title)}</span>
+      <span class="kind">${esc(clock(item.length_seconds))}</span>
+    </div>`).join("");
+  const people = (body.people || []).map((person) => `
+    <div class="person"><span class="team">${esc(person.team)} ${esc(person.position)}</span><span class="who">${esc(person.name)}</span><span class="kind">${esc(person.status)}</span></div>
+  `).join("");
+  const steps = plan.current_source === "live" ? "" : `
+    <div class="row-2">
+      <button type="button" data-action="plan-step" data-delta="-1">Previous</button>
+      <button type="button" data-action="plan-step" data-delta="1">Next</button>
+    </div>`;
+  return `
+    <article class="tile">
+      <div class="tile-head">
+        <h2>${esc(body.title)}</h2>
+        <div class="pills">${plan.current_source === "live" ? pill("Live", "live") : pill("Manual", "")}${plan.stale ? pill("Saved", "bad") : pill("Online", "ok")}</div>
+      </div>
+      <p class="sub">${esc(body.dates)} ${esc(plan.service_type_name)} ${esc(plan.message)}</p>
+      <div class="order-list">${items}</div>
+      <div class="people-list">${people}</div>
+      ${steps}
+      <button type="button" data-action="plan-refresh">Refresh</button>
+    </article>`;
+}
+
+function proclaimTile(proclaim) {
+  const commands = proclaim.commands || [];
+  const button = (id) => {
+    const command = commands.find((item) => item.id === id);
+    if (!command) return "";
+    const disabled = proclaim.connected ? "" : "disabled";
+    return `<button type="button" data-action="proclaim" data-command="${esc(id)}" class="${command.verified ? "" : "unverified"}" ${disabled}>${esc(command.label)}</button>`;
+  };
+  return `
+    <article class="tile">
+      <div class="tile-head">
+        <h2>Proclaim</h2>
+        <div class="pills">${proclaim.connected ? pill(proclaim.on_air ? "On air" : "Off air", proclaim.on_air ? "live" : "ok") : pill("No reply", "bad")}</div>
+      </div>
+      <p class="sub">${esc(proclaim.message || proclaim.note || "")}</p>
+      <div class="proclaim-grid">
+        ${button("previous_slide")}
+        ${button("next_slide")}
+        ${button("previous_item")}
+        ${button("next_item")}
+      </div>
+      <div class="section-grid">
+        ${button("start_pre_service")}
+        ${button("start_warm_up")}
+        ${button("start_service")}
+        ${button("start_post_service")}
+      </div>
+      <p class="sub">Previous slide and the item buttons use command names that are not in the public Proclaim list we could confirm. On Air is the only status Proclaim documents.</p>
+    </article>`;
+}
+
+function mixerTile(mixer) {
+  const banks = mixer.banks || [];
+  if (!state.mixerBank && banks[0]) state.mixerBank = banks[0].id;
+  const bank = banks.find((item) => item.id === state.mixerBank) || banks[0];
+  const bankButtons = banks.map((item) =>
+    `<button type="button" data-action="mixer-bank" data-bank="${esc(item.id)}" class="${state.mixerView === "channels" && bank && item.id === bank.id ? "active" : ""}">${esc(item.name)}</button>`
+  ).join("");
+  const strips = state.mixerView === "dca"
+    ? (mixer.dca_labels || []).map((label, index) => stripHtml("dca", index, label, mixer))
+    : (bank?.channels || []).map((channel) => stripHtml("input", channel.index, channel.label, mixer));
+  const scenes = (mixer.scenes || []).map((scene) =>
+    `<button type="button" data-action="recall-scene" data-bank="${esc(scene.bank)}" data-number="${scene.number}" data-label="${esc(scene.label)}">${esc(scene.label)}</button>`
+  ).join("");
+  return `
+    <article class="tile">
+      <div class="mixer">
+        <div class="tile-head">
+          <h2>TF3</h2>
+          <div class="pills">${mixer.connected ? pill("Connected", "ok") : pill(mixer.state === "not_configured" ? "Not set up" : "No reply", "bad")}</div>
+        </div>
+        <div class="bank-row">${bankButtons}<button type="button" data-action="mixer-dca" class="${state.mixerView === "dca" ? "active" : ""}">DCAs</button></div>
+        <div class="strips">
+          ${stripHtml("master", 0, "Master", mixer)}
+          ${strips}
+        </div>
+        <div class="scene-row">${scenes}</div>
+        <p class="sub">${esc(mixer.message || "")}</p>
+      </div>
+    </article>`;
+}
+
+function stripHtml(target, index, label, mixer) {
+  const strip = mixerStrip(target, index) || {};
+  const pos = strip.level == null ? 0.75 : levelToSlider(strip.level);
+  const on = strip.on !== false;
+  const consoleName = target === "input" ? `Ch ${index + 1}` : target === "dca" ? `DCA ${index + 1}` : "Master";
+  return `
+    <div class="strip ${target === "master" ? "master" : ""}">
+      <span class="strip-name">${esc(label || consoleName)}</span>
+      <span class="strip-level">${strip.level == null ? "—" : esc(formatLevel(strip.level))}</span>
+      <div class="fader" data-fader="${target}" data-index="${index}" style="--pos: ${pos}">
+        <div class="fader-track"><div class="fader-fill"></div></div>
+      </div>
+      <button type="button" data-action="mixer-on" data-target="${target}" data-index="${index}" class="${on ? "on" : ""}">${on ? "On" : "Off"}</button>
+    </div>`;
+}
+
+function mixerStrip(target, index) {
+  return (state.status?.mixer?.strips || {})[`${target}:${index}`];
+}
+
+function soundCard(draft) {
+  const mixer = draft.mixer || { banks: [], dca_labels: [], scenes: [] };
+  const bankId = state.soundBank || mixer.banks[0]?.id || "";
+  state.soundBank = bankId;
+  const bank = (mixer.banks || []).find((item) => item.id === bankId) || mixer.banks[0];
+  const pills = (mixer.banks || []).map((item) =>
+    `<button type="button" data-sound-bank="${esc(item.id)}" class="${item.id === bankId ? "active" : ""}">${esc(item.name)}</button>`
+  ).join("");
+  const slots = (bank?.channels || []).map((channel, index) => `
+    <div class="compact-row" data-slot="${index}">
+      <input data-slot-channel inputmode="numeric" aria-label="Channel ${index + 1}" value="${channel.index + 1}">
+      <input data-slot-label aria-label="Label ${index + 1}" value="${esc(channel.label)}" maxlength="16">
+    </div>`).join("");
+  const dcas = (mixer.dca_labels || []).map((label, index) =>
+    `<input data-dca-label aria-label="DCA ${index + 1}" value="${esc(label)}" maxlength="16">`
+  ).join("");
+  const scenes = (mixer.scenes || []).map((scene, index) => `
+    <div class="scene-edit" data-scene-row="${index}">
+      <select data-scene-bank aria-label="Scene bank"><option value="a" ${scene.bank === "a" ? "selected" : ""}>A</option><option value="b" ${scene.bank === "b" ? "selected" : ""}>B</option></select>
+      <input data-scene-number inputmode="numeric" aria-label="Scene number" value="${scene.number}">
+      <input data-scene-label aria-label="Scene label" value="${esc(scene.label)}" maxlength="24">
+    </div>`).join("");
+  return `
+    <section class="card" data-editing-bank="${esc(bankId)}">
+      <h2>Yamaha TF3</h2>
+      <div class="fields two">
+        <label class="field"><span>Mixer IP</span><input name="mixer-host" value="${esc(mixer.host || "")}" autocomplete="off"></label>
+        <label class="field"><span>Port</span><input value="49280" disabled></label>
+      </div>
+      <div class="actions">
+        <button type="button" class="primary" data-action="save-settings">Save</button>
+        <button type="button" data-action="test-mixer">Test connection</button>
+        <button type="button" data-action="add-bank">Add bank</button>
+      </div>
+      <p class="sub">${esc(state.testResults.mixer || "")}</p>
+      <div class="bank-row">${pills}</div>
+      <div class="slot-grid">${slots}</div>
+      <p class="sub">DCAs</p>
+      <div class="dca-grid">${dcas}</div>
+      <p class="sub">Scenes</p>
+      ${scenes}
+      <button type="button" data-action="add-scene">Add scene</button>
+    </section>`;
+}
+
+function serviceCard(draft) {
+  const plan = draft.planning_center || {};
+  const proclaim = draft.proclaim || {};
+  const types = state.serviceTypes || plan.service_types || [];
+  const typeField = types.length
+    ? `<select name="pco-type">${types.map((row) => `<option value="${esc(row.id)}" ${row.id === plan.service_type_id ? "selected" : ""}>${esc(row.name)}</option>`).join("")}</select>`
+    : `<input name="pco-type" value="${esc(plan.service_type_id || "")}" placeholder="Service type id">`;
+  return `
+    <section class="card">
+      <h2>Planning Center</h2>
+      <p class="lead">Personal access token from Planning Center developer settings. The secret stays on this computer.</p>
+      <div class="fields two">
+        <label class="field"><span>Application ID</span><input name="pco-app" value="${esc(plan.application_id || "")}" autocomplete="off"></label>
+        <label class="field"><span>Secret</span><input name="pco-secret" type="password" placeholder="${plan.secret_set ? "Saved — leave blank to keep" : "Secret"}" autocomplete="new-password"></label>
+        <label class="field"><span>Service type</span>${typeField}</label>
+      </div>
+      <label class="check"><input type="checkbox" name="pco-clear"> Remove the saved secret</label>
+      <div class="actions">
+        <button type="button" class="primary" data-action="save-settings">Save</button>
+        <button type="button" data-action="test-planning">Test connection</button>
+        <button type="button" data-action="load-service-types">Load service types</button>
+      </div>
+      <p class="sub">${esc(state.testResults.planning_center || "")}</p>
+      <h2>Proclaim</h2>
+      <p class="lead">Settings, Remote, Enable. Port 52195 cannot be changed in Proclaim.</p>
+      <div class="fields two">
+        <label class="field"><span>Proclaim computer IP</span><input name="proclaim-host" value="${esc(proclaim.host || "")}" autocomplete="off"></label>
+        <label class="field"><span>Network password</span><input name="proclaim-password" type="password" placeholder="${proclaim.password_set ? "Saved — leave blank to keep" : "proclaim"}" autocomplete="new-password"></label>
+      </div>
+      <label class="check"><input type="checkbox" name="proclaim-clear"> Remove the saved password</label>
+      <div class="actions">
+        <button type="button" data-action="test-proclaim">Test Proclaim</button>
+      </div>
+      <p class="sub">${esc(state.testResults.proclaim || "")}</p>
+    </section>`;
+}
+
+function readMixerFromDom(root, draft) {
+  const mixer = draft.mixer || { banks: [], dca_labels: [], scenes: [] };
+  mixer.host = value(root, "mixer-host").trim();
+  mixer.port = 49280;
+  const bankId = root.querySelector("[data-editing-bank]")?.dataset.editingBank;
+  const channels = [];
+  root.querySelectorAll("[data-slot]").forEach((row) => {
+    const number = Number(row.querySelector("[data-slot-channel]").value);
+    const label = row.querySelector("[data-slot-label]").value.trim();
+    if (!number) return;
+    channels.push({ index: number - 1, label: label || `Ch ${number}` });
+  });
+  mixer.banks = (mixer.banks || []).map((bank) => (bank.id === bankId ? { ...bank, channels: channels.slice(0, 8) } : bank));
+  const labels = [];
+  root.querySelectorAll("[data-dca-label]").forEach((input) => labels.push(input.value.trim() || "DCA"));
+  if (labels.length === 8) mixer.dca_labels = labels;
+  const scenes = [];
+  root.querySelectorAll("[data-scene-row]").forEach((row) => {
+    scenes.push({
+      bank: row.querySelector("[data-scene-bank]").value,
+      number: Number(row.querySelector("[data-scene-number]").value) || 0,
+      label: row.querySelector("[data-scene-label]").value.trim() || "Scene",
+    });
+  });
+  if (root.querySelector("[data-scene-row]")) mixer.scenes = scenes;
+  draft.mixer = mixer;
+}
+
+function addBank() {
+  readSettingsFromDom();
+  const mixer = state.settings.mixer;
+  const start = mixer.banks.reduce((max, bank) => Math.max(max, ...bank.channels.map((channel) => channel.index)), -1) + 1;
+  const number = mixer.banks.length + 1;
+  mixer.banks.push({
+    id: `bank${number}`,
+    name: `Bank ${number}`,
+    channels: Array.from({ length: 8 }, (_, offset) => ({ index: Math.min(39, start + offset), label: `Ch ${Math.min(40, start + offset + 1)}` })),
+  });
+  state.soundBank = `bank${number}`;
+  renderShell();
+}
+
+function addScene() {
+  readSettingsFromDom();
+  state.settings.mixer.scenes.push({ bank: "a", number: state.settings.mixer.scenes.length, label: `A${state.settings.mixer.scenes.length}` });
+  renderShell();
+}
+
+function startFader(event, el) {
+  if (event.button !== undefined && event.button !== 0) return;
+  event.preventDefault();
+  state.holding = true;
+  state.dragKey = `${el.dataset.fader}:${el.dataset.index}`;
+  const move = (ev) => moveFader(el, ev.clientY, false);
+  const finish = (ev) => {
+    moveFader(el, ev.clientY, true);
+    state.holding = false;
+    state.dragKey = "";
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", finish);
+    if (state.pendingRender) renderShell();
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", finish);
+  moveFader(el, event.clientY, false);
+}
+
+function moveFader(el, clientY, immediate) {
+  const rect = el.getBoundingClientRect();
+  const fraction = rect.height ? Math.min(1, Math.max(0, (rect.bottom - clientY) / rect.height)) : 0;
+  el.style.setProperty("--pos", String(fraction));
+  const level = sliderToLevel(fraction);
+  const label = el.closest(".strip")?.querySelector(".strip-level");
+  if (label) label.textContent = formatLevel(level);
+  state.pendingLevel = { target: el.dataset.fader, index: Number(el.dataset.index), level };
+  if (immediate) {
+    clearTimeout(moveFader.timer);
+    postQuiet("/api/integrations/mixer/actions/set_level", state.pendingLevel);
+    return;
+  }
+  if (moveFader.timer) return;
+  moveFader.timer = setTimeout(() => {
+    moveFader.timer = null;
+    if (state.pendingLevel) postQuiet("/api/integrations/mixer/actions/set_level", state.pendingLevel);
+  }, 80);
+}
+
+function toggleMixerOn(target, index) {
+  const strip = mixerStrip(target, index) || {};
+  const on = strip.on === false;
+  postQuiet("/api/integrations/mixer/actions/set_on", { target, index, on });
+  if (state.status?.mixer) {
+    state.status.mixer.strips = state.status.mixer.strips || {};
+    const key = `${target}:${index}`;
+    state.status.mixer.strips[key] = { ...(state.status.mixer.strips[key] || {}), on };
+  }
+  patchMixer();
+}
+
+function askRecall(bank, number, label) {
+  state.modal = {
+    title: `Recall ${label}?`,
+    body: "This recalls that scene on the Yamaha TF3.",
+    confirmLabel: "Recall",
+    danger: true,
+    onConfirm: () => run("mixer", "recall_scene", { bank, number, confirm: true }),
+  };
+  renderModal();
+}
+
+async function loadServiceTypes() {
+  await testIntegration("planning_center");
+}
+
+async function testIntegration(id) {
+  if (!(await saveSettings())) return;
+  try {
+    const result = await api(`/api/integrations/${id}/test`, { method: "POST", body: "{}" });
+    state.testResults[id] = result.message;
+    if (result.service_types) state.serviceTypes = result.service_types;
+  } catch (error) {
+    state.testResults[id] = error.message;
+  }
+  renderShell();
+}
+
+function sliderToLevel(position) {
+  if (position <= 0.005) return -32768;
+  const db = -60 + Math.min(1, Math.max(0, position)) * 70;
+  return Math.max(-32768, Math.min(1000, Math.round(db * 100)));
+}
+
+function levelToSlider(level) {
+  if (level <= -6000) return 0;
+  const db = Math.max(-60, Math.min(10, level / 100));
+  return (db + 60) / 70;
+}
+
+function formatLevel(level) {
+  if (level <= -32768) return "−∞";
+  const text = (level / 100).toFixed(1);
+  return text === "-0.0" ? "0.0" : text;
+}
+
+function clock(seconds) {
+  const total = Number(seconds) || 0;
+  if (!total) return "";
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+document.addEventListener("click", (event) => {
+  const bank = event.target.closest("[data-sound-bank]");
+  if (!bank) return;
+  readSettingsFromDom();
+  state.soundBank = bank.dataset.soundBank;
+  renderShell();
 });

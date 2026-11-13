@@ -13,7 +13,7 @@ def build_integrations(store, obs_factory=None, ptz_factory=None) -> dict:
     return {
         "obs": ObsIntegration(store, client_factory=obs_factory),
         "ptz": PtzIntegration(store, driver_factory=ptz_factory),
-        "planning_center": PlanningCenterIntegration(),
-        "proclaim": ProclaimIntegration(),
-        "mixer": MixerIntegration(),
+        "planning_center": PlanningCenterIntegration(store),
+        "proclaim": ProclaimIntegration(store),
+        "mixer": MixerIntegration(store),
     }

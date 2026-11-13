@@ -37,7 +37,11 @@ def test_first_launch_creates_default_passcode_and_bind_address(config_path: Pat
     assert saved["auth"]["passcode_hash"] != saved["auth"]["passcode_salt"]
     assert not config_path.with_suffix(".json.tmp").exists()
     visible = [tile["id"] for tile in saved["dashboard"]["tiles"] if tile["visible"]]
-    assert visible == ["obs", "ptz"]
+    assert visible == ["obs", "ptz", "planning_center", "proclaim", "mixer"]
+    assert saved["dashboard"]["tiles"][0]["page"] == "stream"
+    assert saved["mixer"]["port"] == 49280
+    assert len(saved["mixer"]["banks"][0]["channels"]) == 8
+    assert saved["proclaim"]["port"] == 52195
 
 
 def test_two_new_files_use_different_salts(tmp_path: Path):

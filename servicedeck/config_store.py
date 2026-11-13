@@ -15,7 +15,7 @@ import threading
 from pathlib import Path
 
 from servicedeck.auth import ALGORITHM, DEFAULT_ITERATIONS, hash_passcode
-from servicedeck.catalog import BY_ID, INTEGRATIONS
+from servicedeck.catalog import BY_ID, INTEGRATIONS, PAGE_IDS
 from servicedeck.errors import ConfigError
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -46,6 +46,9 @@ def template() -> dict:
             "start_scene": "",
         },
         "cameras": [],
+        "planning_center": {"application_id": "", "secret": "", "service_type_id": ""},
+        "proclaim": {"host": "", "port": 52195, "password": ""},
+        "mixer": _default_mixer(),
     }
 
 
@@ -111,6 +114,18 @@ class ConfigStore:
                 updated["obs"] = _obs(obs)
             if "cameras" in payload:
                 updated["cameras"] = _cameras(payload.get("cameras") or [])
+            if "planning_center" in payload:
+                current = dict(payload.get("planning_center") or {})
+                if "secret" not in current:
+                    current["secret"] = updated["planning_center"]["secret"]
+                updated["planning_center"] = _planning_center(current)
+            if "proclaim" in payload:
+                current = dict(payload.get("proclaim") or {})
+                if "password" not in current:
+                    current["password"] = updated["proclaim"]["password"]
+                updated["proclaim"] = _proclaim(current)
+            if "mixer" in payload:
+                updated["mixer"] = _mixer(payload.get("mixer") or {})
             if "dashboard" in payload:
                 tiles = (payload.get("dashboard") or {}).get("tiles")
                 updated["dashboard"] = {"tiles": _tiles(tiles)}
@@ -130,11 +145,20 @@ class ConfigStore:
             obs = copy.deepcopy(self.data["obs"])
             password = obs.pop("password")
             obs["password_set"] = bool(password)
+            planning = copy.deepcopy(self.data["planning_center"])
+            secret = planning.pop("secret")
+            planning["secret_set"] = bool(secret)
+            proclaim = copy.deepcopy(self.data["proclaim"])
+            proclaim_password = proclaim.pop("password")
+            proclaim["password_set"] = bool(proclaim_password)
             return {
                 "organization": self.data["organization"],
                 "server": copy.deepcopy(self.data["server"]),
                 "obs": obs,
                 "cameras": copy.deepcopy(self.data["cameras"]),
+                "planning_center": planning,
+                "proclaim": proclaim,
+                "mixer": copy.deepcopy(self.data["mixer"]),
                 "dashboard": copy.deepcopy(self.data["dashboard"]),
                 "must_change_passcode": bool(self.data["auth"]["must_change_passcode"]),
             }
@@ -173,6 +197,9 @@ def _normalize(data: dict) -> dict:
     data["server"] = _server(data.get("server") or {})
     data["obs"] = _obs(data.get("obs") or {})
     data["cameras"] = _cameras(data.get("cameras") or [])
+    data["planning_center"] = _planning_center(data.get("planning_center") or {})
+    data["proclaim"] = _proclaim(data.get("proclaim") or {})
+    data["mixer"] = _mixer(data.get("mixer") or {})
     dashboard = data.get("dashboard") if isinstance(data.get("dashboard"), dict) else {}
     data["dashboard"] = {"tiles": _tiles(dashboard.get("tiles"))}
     data["auth"] = _auth(data.get("auth") or {})
@@ -307,6 +334,7 @@ def _tiles(raw) -> list[dict]:
             "id": tile_id,
             "visible": bool(item.get("visible", False)),
             "order": order,
+            "page": _page(item.get("page"), tile_id),
         }
     for index, spec in enumerate(INTEGRATIONS):
         by_id.setdefault(
@@ -315,6 +343,7 @@ def _tiles(raw) -> list[dict]:
                 "id": spec["id"],
                 "visible": bool(spec["default_visible"]),
                 "order": 100 + index,
+                "page": spec["page"],
             },
         )
     ordered = sorted(by_id.values(), key=lambda tile: (tile["order"], tile["id"]))
@@ -362,6 +391,140 @@ def _integer(value, label: str) -> int:
         return int(value)
     except (TypeError, ValueError) as exc:
         raise ConfigError(f"{label} must be a whole number.") from exc
+
+
+def _page(value, tile_id: str) -> str:
+    if value in PAGE_IDS:
+        return str(value)
+    return str(BY_ID[tile_id].get("page") or "stream")
+
+
+def _planning_center(raw: dict) -> dict:
+    if not isinstance(raw, dict):
+        raise ConfigError("Planning Center settings must be an object.")
+    application_id = str(raw.get("application_id") or "").strip()
+    secret = raw.get("secret", "")
+    if secret is None:
+        secret = ""
+    if not isinstance(secret, str):
+        raise ConfigError("The Planning Center secret must be text.")
+    service_type_id = str(raw.get("service_type_id") or "").strip()
+    if any(character.isspace() for character in application_id + service_type_id):
+        raise ConfigError("Planning Center ids cannot contain spaces.")
+    return {
+        "application_id": application_id[:80],
+        "secret": secret,
+        "service_type_id": service_type_id[:40],
+    }
+
+
+def _proclaim(raw: dict) -> dict:
+    if not isinstance(raw, dict):
+        raise ConfigError("Proclaim settings must be an object.")
+    host = str(raw.get("host") or "").strip()
+    if any(character.isspace() for character in host):
+        raise ConfigError("Proclaim host cannot contain spaces.")
+    password = raw.get("password", "")
+    if password is None:
+        password = ""
+    if not isinstance(password, str):
+        raise ConfigError("The Proclaim password must be text.")
+    return {"host": host[:253], "port": _port(raw.get("port", 52195), "Proclaim port"), "password": password}
+
+
+def _default_mixer() -> dict:
+    def bank(name: str, start: int) -> dict:
+        return {
+            "id": name.lower().replace(" ", ""),
+            "name": name,
+            "channels": [{"index": start + offset, "label": f"Ch {start + offset + 1}"} for offset in range(8)],
+        }
+
+    return {
+        "host": "",
+        "port": 49280,
+        "banks": [bank("Bank 1", 0), bank("Bank 2", 8)],
+        "dca_labels": [f"DCA {number}" for number in range(1, 9)],
+        "scenes": [
+            {"bank": "a", "number": 0, "label": "A0"},
+            {"bank": "a", "number": 1, "label": "A1"},
+        ],
+    }
+
+
+def _mixer(raw: dict) -> dict:
+    if not isinstance(raw, dict):
+        raw = {}
+    host = str(raw.get("host") or "").strip()
+    if any(character.isspace() for character in host):
+        raise ConfigError("Mixer host cannot contain spaces.")
+    banks = raw.get("banks")
+    if not banks:
+        banks = _default_mixer()["banks"]
+    if not isinstance(banks, list) or not 1 <= len(banks) <= 12:
+        raise ConfigError("Save between 1 and 12 mixer banks.")
+    cleaned_banks = []
+    seen_ids: set[str] = set()
+    for bank in banks:
+        if not isinstance(bank, dict):
+            raise ConfigError("Each mixer bank needs a name.")
+        name = str(bank.get("name") or "").strip()
+        if not name or len(name) > 24:
+            raise ConfigError("Bank names must be 1 to 24 characters.")
+        bank_id = str(bank.get("id") or name.lower().replace(" ", ""))[:24]
+        if bank_id in seen_ids:
+            raise ConfigError("Two mixer banks have the same id.")
+        seen_ids.add(bank_id)
+        channels = bank.get("channels") or []
+        if not isinstance(channels, list) or len(channels) > 8:
+            raise ConfigError(f"{name} can show at most 8 channels.")
+        cleaned_channels = []
+        for channel in channels:
+            if not isinstance(channel, dict):
+                raise ConfigError(f"{name} has a channel that is missing a number.")
+            number = _integer(channel.get("index"), f"A channel in {name}")
+            if not 0 <= number <= 39:
+                raise ConfigError("TF3 input channels are 1 to 40.")
+            label = str(channel.get("label") or f"Ch {number + 1}").strip()
+            if not label or len(label) > 16:
+                raise ConfigError("Channel labels must be 1 to 16 characters.")
+            cleaned_channels.append({"index": number, "label": label})
+        cleaned_banks.append({"id": bank_id, "name": name, "channels": cleaned_channels})
+    labels = raw.get("dca_labels")
+    if not isinstance(labels, list) or len(labels) != 8:
+        labels = _default_mixer()["dca_labels"]
+    dca_labels = []
+    for index, label in enumerate(labels):
+        text = str(label or f"DCA {index + 1}").strip()
+        if not text or len(text) > 16:
+            raise ConfigError("DCA labels must be 1 to 16 characters.")
+        dca_labels.append(text)
+    scenes_raw = raw.get("scenes")
+    if scenes_raw is None:
+        scenes_raw = _default_mixer()["scenes"]
+    if not isinstance(scenes_raw, list) or len(scenes_raw) > 40:
+        raise ConfigError("Save at most 40 mixer scenes.")
+    scenes = []
+    for scene in scenes_raw:
+        if not isinstance(scene, dict):
+            raise ConfigError("Each scene needs a bank and a number.")
+        bank = str(scene.get("bank") or "").lower()
+        if bank not in ("a", "b"):
+            raise ConfigError("Scene banks are A and B.")
+        number = _integer(scene.get("number"), "Scene number")
+        if not 0 <= number <= 99:
+            raise ConfigError("Scene numbers are 0 to 99.")
+        label = str(scene.get("label") or f"{bank.upper()}{number}").strip()
+        if not label or len(label) > 24:
+            raise ConfigError("Scene labels must be 1 to 24 characters.")
+        scenes.append({"bank": bank, "number": number, "label": label})
+    return {
+        "host": host[:253],
+        "port": _port(raw.get("port", 49280), "Mixer port"),
+        "banks": cleaned_banks,
+        "dca_labels": dca_labels,
+        "scenes": scenes,
+    }
 
 
 def _new_camera_id(seen_ids: set[str]) -> str:
