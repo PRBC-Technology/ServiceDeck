@@ -1,0 +1,39 @@
+{
+  "_comment": "Example only. ServiceDeck creates config/servicedeck.json on first launch and stores the passcode hash and device passwords there. That file is git-ignored. Keys starting with _ are ignored.",
+  "organization": "PRBC",
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8080
+  },
+  "obs": {
+    "_comment": "OBS WebSocket password. Leave blank here. The Facebook stream key stays in OBS and is not a ServiceDeck setting.",
+    "host": "192.168.1.50",
+    "port": 4455,
+    "password": "",
+    "use_start_scene": false,
+    "start_scene": "Welcome"
+  },
+  "cameras": [
+    {
+      "id": "cam_main",
+      "name": "Main camera",
+      "host": "192.168.1.61",
+      "port": 52381,
+      "protocol": "visca_ip",
+      "presets": [
+        {"number": 1, "label": "Wide"},
+        {"number": 2, "label": "Pulpit"},
+        {"number": 3, "label": "Piano"}
+      ]
+    }
+  ],
+  "dashboard": {
+    "tiles": [
+      {"id": "obs", "visible": true, "order": 0},
+      {"id": "ptz", "visible": true, "order": 1},
+      {"id": "planning_center", "visible": false, "order": 2},
+      {"id": "proclaim", "visible": false, "order": 3},
+      {"id": "mixer", "visible": false, "order": 4}
+    ]
+  }
+}
